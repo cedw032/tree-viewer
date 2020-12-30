@@ -1,41 +1,121 @@
-import { useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { KeyboardModifiers } from '../hooks/useKeyboardModifiers'
-import { handleKeys } from '../handleKeys'
-import type { NodeInterface } from '../hooks/useTree'
+import { useKeyboard } from '../hooks/useKeyboard'
+import type { NodeInterface, NodePath } from '../hooks/useTree'
 
 type NodeRProps = {
   node: NodeInterface
   context: {
     keyboardModifiers: KeyboardModifiers
+    currentPath: string
+    actions: {
+      setCurrentPathAsParent: () => void
+      setCurrentPathAsPreviousSibling: () => void
+      setCurrentPathAsNextSibling: () => void
+      setCurrentPath: (path: NodePath) => void
+      setLastCurrentChildOfParent: (path: NodePath) => void
+    }
   }
 }
 
 export function NodeR({
   node: {
+    path,
     value,
     children,
-    actions: { addChild, addSibling, setValue },
+    actions: { addChild, addSiblingAfter, addSiblingBefore, setValue },
   },
-  context: { keyboardModifiers },
+  context: {
+    keyboardModifiers,
+    currentPath,
+    actions: {
+      setCurrentPath,
+      setCurrentPathAsParent,
+      setCurrentPathAsPreviousSibling,
+      setCurrentPathAsNextSibling,
+      setLastCurrentChildOfParent,
+    },
+  },
 }: NodeRProps) {
-  console.log('KBM2', keyboardModifiers)
-
-  const { handleKeyPress, handleKeyRelease } = handleKeys({
-    Enter: {
-      // @ts-ignore
-      down: () => (keyboardModifiers.Shift ? addChild() : addSibling()),
-    },
-    ArrowLeft: {
-      down: () => undefined /*shift && focusParent()*/,
-    },
-  })
-
   // @ts-ignore
   const textI: MutableRefObject<HTMLInputElement> = useRef()
 
+  const isCurrentNode = currentPath === path
+
+  const initialLastCurrentChild: NodePath | null = null
+  const [lastCurrentChild, setLastCurrentChild] = useState(
+    initialLastCurrentChild
+  )
+
+  useKeyboard(
+    {
+      Enter: {
+        down: () => {
+          if (keyboardModifiers.Shift) {
+            const newPath = addChild()
+            setCurrentPath(newPath)
+            // @ts-ignore
+            setLastCurrentChild(newPath)
+          } else {
+            const newPath = addSiblingAfter()
+            setCurrentPath(newPath)
+            setLastCurrentChildOfParent(newPath)
+          }
+        },
+      },
+      ArrowLeft: {
+        down: setCurrentPathAsParent,
+      },
+      ArrowUp: {
+        down: () => {
+          if (keyboardModifiers.Shift) {
+            const newPath = addSiblingBefore()
+            setCurrentPath(newPath)
+            setLastCurrentChildOfParent(newPath)
+          } else {
+            setCurrentPathAsPreviousSibling()
+          }
+        },
+      },
+      ArrowDown: {
+        down: setCurrentPathAsNextSibling,
+      },
+      ArrowRight: {
+        down: () => {
+          if (lastCurrentChild !== null) {
+            // @ts-ignore
+            setCurrentPath(lastCurrentChild)
+          } else if (children[0] !== undefined) {
+            setCurrentPath(children[0].path)
+            // @ts-ignore
+            setLastCurrentChild(children[0].path)
+          }
+        },
+      },
+    },
+    !isCurrentNode
+  )
+
+  useEffect(() => {
+    isCurrentNode && textI.current.focus()
+
+    textI.current.addEventListener('focus', () => {
+      setCurrentPath(path)
+    })
+
+    return () =>
+      textI.current.removeEventListener('focus', () => {
+        setCurrentPath(path)
+      })
+  }, [isCurrentNode, textI])
+
+  const nodeStyles = isCurrentNode
+    ? { ...styles.nodeValue, ...styles.currentNode }
+    : styles.nodeValue
+
   return (
     <div style={styles.row}>
-      <div style={styles.nodeValue}>
+      <div style={nodeStyles}>
         <input
           type="text"
           ref={textI}
@@ -43,13 +123,39 @@ export function NodeR({
           style={styles.input}
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          onKeyDown={handleKeyPress}
-          onKeyUp={handleKeyRelease}
         />
       </div>
       <div style={styles.column}>
         {children.map((child, i) => (
-          <NodeR key={i} node={child} context={{ keyboardModifiers }} />
+          <NodeR
+            key={child.path}
+            node={child}
+            context={{
+              keyboardModifiers,
+              currentPath,
+              actions: {
+                setCurrentPath,
+                setCurrentPathAsParent: () => {
+                  setCurrentPath(path)
+                },
+                setCurrentPathAsPreviousSibling: () => {
+                  const childPath =
+                    children[(children.length + i - 1) % children.length].path
+                  setCurrentPath(childPath)
+                  // @ts-ignore
+                  setLastCurrentChild(childPath)
+                },
+                setCurrentPathAsNextSibling: () => {
+                  const childPath = children[(i + 1) % children.length].path
+                  setCurrentPath(childPath)
+                  // @ts-ignore
+                  setLastCurrentChild(childPath)
+                },
+                // @ts-ignore
+                setLastCurrentChildOfParent: setLastCurrentChild,
+              },
+            }}
+          />
         ))}
       </div>
     </div>
@@ -66,6 +172,11 @@ const styles = {
     padding: 5,
     borderColor: 'black',
     borderStyle: 'solid',
+  },
+  currentNode: {
+    borderWidth: 3,
+    borderStyle: 'dashed',
+    borderColor: 'green',
   },
   input: {
     borderWidth: 1,

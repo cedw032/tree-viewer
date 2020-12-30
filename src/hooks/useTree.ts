@@ -4,6 +4,7 @@ import type { Guid } from '../guid'
 import { guid } from '../guid'
 
 type NodeId = Guid & { readonly __NodeId: unique symbol }
+export type NodePath = string & { readonly __NodePath: unique symbol }
 
 type NodeShape = {
   children: NodeId[]
@@ -20,17 +21,31 @@ function nodeId(): NodeId {
 }
 
 export type NodeInterface = {
+  path: NodePath
   value: string
   children: NodeInterface[]
   actions: {
-    addChild: () => void
-    addSibling: () => void
+    addChild: () => NodePath
+    addSiblingBefore: () => NodePath
+    addSiblingAfter: () => NodePath
     setValue: (s: string) => void
   }
 }
 
 type Lookup<T, U extends string> = {
   [key in U]: T
+}
+
+type NodeChildIndex = number & { readonly __NodeChildIndex: unique symbol }
+
+export function isNodeChildIndex(n: NodeInterface) {
+  return function (i: number): i is NodeChildIndex {
+    return i < n.children.length
+  }
+}
+
+export function firstNodeChildIndex() {
+  return 0 as NodeChildIndex
 }
 
 export function useTree(): NodeInterface[] {
@@ -58,7 +73,7 @@ export function useTree(): NodeInterface[] {
     return { children: [], value: '' }
   }
 
-  function addNode(n: NodeShape): NodeId {
+  function createNode(n: NodeShape): NodeId {
     const node = { ...n, id: nodeId() } as Node
     setNode(node)
     return node.id
@@ -78,16 +93,13 @@ export function useTree(): NodeInterface[] {
     })
   }
 
-  const addChildAfter = (pId: NodeId, eId: NodeId | null) => () => {
+  function appendChildAt(pId: NodeId, id: NodeId, index: NodeChildIndex) {
     const p = viewNode(pId)
 
-    const newIndex = eId === null ? 0 : p.children.indexOf(eId) + 1
-    const newNodeId = addNode(emptyNode())
-
     setChildren(p, [
-      ...p.children.slice(0, newIndex),
-      newNodeId,
-      ...p.children.slice(newIndex, p.children.length),
+      ...p.children.slice(0, index),
+      id,
+      ...p.children.slice(index, p.children.length),
     ])
   }
 
@@ -96,31 +108,52 @@ export function useTree(): NodeInterface[] {
     setNode({ ...n, value })
   }
 
-  function lastChild({ children }: Node): NodeId | null {
-    return children[children.length - 1] || null
-  }
-
-  function buildNodeInterface(id: string, parent: string): NodeInterface {
+  function buildNodeInterface(
+    id: NodeId,
+    parent: NodeId,
+    index: number,
+    parentPath: NodePath
+  ): NodeInterface {
     // @ts-ignore
     const node: Node = viewNode(id)
+    const path = appendPath(id, parentPath)
     return {
+      path,
       value: node.value,
-      children: node.children.map((child) => buildNodeInterface(child, id)),
+      children: node.children.map((child, i) =>
+        buildNodeInterface(child, id, i, path)
+      ),
       actions: {
-        addSibling:
-          // @ts-ignore
-          addChildAfter(parent, id),
+        addSiblingAfter: () => {
+          const siblingId = createNode(emptyNode())
+          appendChildAt(parent, siblingId, (index + 1) as NodeChildIndex)
+          return appendPath(siblingId, parentPath)
+        },
 
-        addChild:
-          // @ts-ignore
-          addChildAfter(id, lastChild(node)),
-        // @ts-ignore
+        addSiblingBefore: () => {
+          const siblingId = createNode(emptyNode())
+          appendChildAt(parent, siblingId, index as NodeChildIndex)
+          return appendPath(siblingId, parentPath)
+        },
+
+        addChild: () => {
+          const childId = createNode(emptyNode())
+          appendChildAt(id, childId, node.children.length as NodeChildIndex)
+          return appendPath(childId, path)
+        },
+
         setValue: setValue(id),
       },
     }
   }
 
-  return viewNode(rootId).children.map((child) =>
-    buildNodeInterface(child, rootId)
+  const root = viewNode(rootId)
+  return root.children.map((child, i) =>
+    buildNodeInterface(child, rootId, i, appendPath(rootId, null))
   )
+}
+
+function appendPath(n: NodeId, p: NodePath | null): NodePath {
+  // @ts-ignore
+  return p === null ? n : `${n}.${p}`
 }
